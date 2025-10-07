@@ -3,8 +3,12 @@ import os
 import random
 
 from bt_live.ros_node import SingletonBtLiveNode
+from bt_view.bt_view import NODE_HEIGHT_IN, NODE_WIDTH_IN, draw_pygraphviz
 
 from django.http import HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+import json as _json
 
 
 def index(request):
@@ -73,6 +77,67 @@ def index(request):
         </html>
         """)
     return HttpResponse(index_page_str)
+
+
+@csrf_exempt
+def relayout(request):
+    """Re-render the SVG with node widths/heights provided by the client.
+
+    Body JSON format:
+    {
+      "dims": { "<node_id>": {"w": <inches>, "h": <inches>}, ... }
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+
+    try:
+        payload = _json.loads(request.body.decode('utf-8') or '{}')
+    except Exception:
+        payload = {}
+    dims = payload.get('dims', {}) or {}
+
+    node = SingletonBtLiveNode()
+    img_path = node.img_path
+
+    g = node.g
+
+    def modifier(n):
+        try:
+            nid = int(str(n))
+        except Exception:
+            return
+        if str(nid) in dims:
+            wh = dims[str(nid)]
+            w = wh.get('w')
+            h = wh.get('h')
+            if w:
+                n.attr['width'] = str(float(w))
+            if h:
+                n.attr['height'] = str(float(h))
+
+    # derive graph spacing based on requested sizes
+    try:
+        max_w = max([float(d.get('w', NODE_WIDTH_IN)) for d in dims.values()]) if dims else NODE_WIDTH_IN
+        max_h = max([float(d.get('h', NODE_HEIGHT_IN)) for d in dims.values()]) if dims else NODE_HEIGHT_IN
+    except Exception:
+        max_w, max_h = NODE_WIDTH_IN, NODE_HEIGHT_IN
+    # base sep values in inches
+    base_nodesep = 1.0
+    base_ranksep = 2.4
+    # scale by relative size increase (bounded)
+    nodesep = max(base_nodesep, min(3.0, base_nodesep * (max_w / NODE_WIDTH_IN)))
+    ranksep = max(base_ranksep, min(5.5, base_ranksep * (max_h / NODE_HEIGHT_IN)))
+    margin = max(0.8, 0.25 * max(max_w, max_h))
+    extra = f"-Gnodesep={nodesep} -Granksep={ranksep} -Gmargin={margin}"
+
+    draw_pygraphviz(g, img_path, modifier, extra_graph_args=extra)
+
+    # Return the fresh SVG string
+    fname_svg = img_path + '.svg'
+    with open(fname_svg, 'r') as f:
+        svg_str = f.read()
+    return HttpResponse(svg_str, content_type='image/svg+xml')
 
 
 def data(request):

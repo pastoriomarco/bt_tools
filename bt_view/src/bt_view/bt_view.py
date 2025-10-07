@@ -199,6 +199,7 @@ def draw_pygraphviz(
     g: nx.Graph,
     fname: str,
     modifier,
+    extra_graph_args: str = '',
 ):
     A = nx.nx_agraph.to_agraph(g)  # convert to a graphviz graph
     for node in A.nodes():
@@ -218,8 +219,8 @@ def draw_pygraphviz(
         A.draw(
             f'{fname}.{ext}',
             prog='dot',
-            # ordering of the outedges
-            args='-Gordering=out'
+            # ordering of the outedges and extra attributes
+            args='-Gordering=out ' + (extra_graph_args or '')
         )
 
 
@@ -240,7 +241,8 @@ def draw_pygraphviz_w_valuemod(
             style='filled',
             fillcolor=_colormap('RdYlGn', value_color[int(node)]),
             label=format_label(g.nodes[int(node)]),
-        )
+        ),
+        extra_graph_args='',
     )
 
 
@@ -285,7 +287,8 @@ def draw_pygraphviz_w_returnstates(
     draw_pygraphviz(
         g,
         fname,
-        modifier=modifier
+        modifier=modifier,
+        extra_graph_args='',
     )
 
 
@@ -301,7 +304,8 @@ def draw_pygraphviz_w_colorvalues(
         lambda node: node.attr.update(
             style='filled',
             fillcolor=value_color[int(node)],
-        )
+        ),
+        extra_graph_args='',
     )
 
 
@@ -327,6 +331,91 @@ def draw_pygraphviz_w_history(
                     value_history[int(node)]
                 ),
                 label=format_label(g.nodes[int(node)])
+            )
+
+    draw_pygraphviz(
+        g,
+        fname,
+        modifier=modifier,
+        extra_graph_args='',
+    )
+
+
+def _ensure_bg_folder():
+    if not os.path.exists(BG_IMG_FOLDER):
+        os.makedirs(BG_IMG_FOLDER, exist_ok=True)
+
+
+def _render_subtree_preview(g: nx.DiGraph, root: int) -> Optional[str]:
+    """Render a subtree preview image for a node and return its file path.
+
+    The resulting image is resized to the node box size for embedding
+    as the node's `image` attribute in Graphviz.
+    """
+    desc = nx.descendants(g, root) if hasattr(nx, 'descendants') else set()
+    if not desc:
+        return None
+    nodes = set(desc)
+    nodes.add(root)
+    subg = g.subgraph(nodes).copy()
+
+    # Draw the subtree to a temporary PNG using Graphviz
+    _ensure_bg_folder()
+    tmp_png = os.path.join(BG_IMG_FOLDER, f'_subtree_n{root}.png')
+    A = nx.nx_agraph.to_agraph(subg)
+    for n in A.nodes():
+        n.attr['shape'] = 'box'
+        n.attr['fontname'] = 'Bitstream Vera Sans Mono'
+        n.attr['label'] = format_label(subg.nodes[int(n)])
+        n.attr['width'] = str(NODE_WIDTH_IN)
+        n.attr['height'] = str(NODE_HEIGHT_IN)
+    for e in A.edges():
+        e.attr['label'] = ''
+    A.draw(tmp_png, prog='dot', args='-Gordering=out')
+
+    # Resize to match node dimensions so Graphviz places it cleanly
+    width_px = int(NODE_WIDTH_IN * DPI)
+    height_px = int(NODE_HEIGHT_IN * DPI)
+    final_png = os.path.join(BG_IMG_FOLDER, f'subtree_n{root}.png')
+    try:
+        img = Image.open(tmp_png)
+        try:
+            img = img.resize((width_px, height_px), resample=Image.Resampling.BILINEAR)
+        except AttributeError:
+            img = img.resize((width_px, height_px), resample=Image.BILINEAR)
+        img.save(final_png)
+        return final_png
+    except Exception:
+        return None
+
+
+def draw_pygraphviz_w_subtree_previews(
+    g: nx.Graph,
+    fname: str,
+):
+    """Draw the main graph and attach subtree preview images to non-leaf nodes.
+
+    This leverages Graphviz's `image` node attribute. The live UI can toggle
+    visibility to show these images when a node is collapsed.
+    """
+    g = g.copy()
+    preview_path_per_node: Dict[int, str] = {}
+
+    for node in g.nodes:
+        try:
+            path = _render_subtree_preview(g, int(node))
+            if path:
+                preview_path_per_node[int(node)] = path
+        except Exception:
+            # If anything goes wrong for a node, skip its preview
+            continue
+
+    def modifier(n):
+        nid = int(n)
+        if nid in preview_path_per_node:
+            n.attr.update(
+                image=preview_path_per_node[nid],
+                label=format_label(g.nodes[nid])
             )
 
     draw_pygraphviz(

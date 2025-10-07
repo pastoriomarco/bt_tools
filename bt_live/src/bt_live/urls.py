@@ -26,6 +26,7 @@ urlpatterns = [
     path('', views.index, name='index'),
     path('data', views.data, name='data'),
     path('msg', stream.msg, name='msg'),
+    path('relayout', views.relayout, name='relayout'),
     path('favicon.png', views.favicon_png, name='favicon_png'),
     path('favicon.svg', views.favicon_svg, name='favicon_svg'),
 ]
